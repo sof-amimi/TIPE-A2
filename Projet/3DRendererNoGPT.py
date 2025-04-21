@@ -81,4 +81,11 @@ class Transform:
 
         return T @ R @ S
 
-
+def projection_matrix(fov, aspect_ratio, near, far):
+    f = 1 / np.tan(np.radians(fov) / 2)
+    return np.array([
+        [f / aspect_ratio, 0, 0, 0],
+        [0, f, 0, 0],
+        [0, 0, (far + near) / (near - far), (2 * far * near) / (near - far)],
+        [0, 0, -1, 0]
+    ])
