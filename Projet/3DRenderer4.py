@@ -1,4 +1,5 @@
 import pygame
+import pyassimp
 import numpy as np
 
 # Initialiser pygame
@@ -142,11 +143,49 @@ def draw_edges(edges, vertices_2d):
                 screen.set_at(point, (0, 0, 0))
 
 
-# Matrice origine monde
-origin = Transform()
+def get_edges_from_faces(mesh):
+    edges = set()
+    for face in mesh.faces:
+        if len(face) >= 2:
+            for i in range(len(face)):
+                a = face[i]
+                b = face[(i + 1) % len(face)]
+                edge = tuple(sorted((a, b)))
+                edges.add(edge)
+    return list(edges)
 
-# Matrice de transformation du cube
-cube_transform = Transform((0,0,500),(0,0,0),(100,100,100))
+
+def parcourir_nodes(mdl, node, mesh_data, parent_transform = (0,0,0)):
+    local_transform = node.transformation.astype(np.float64)
+    global_transform = parent_transform @ local_transform
+
+    for mesh_index in node.meshes:
+        mesh = mdl.meshes[mesh_index]
+        vertices = mesh.vertices
+
+        for v in vertices:
+            v_homo = np.append(v, 1)
+            transformed = global_transform @ v_homo
+            transformed_vertices(transformed[:3])
+
+        transformed_edge = get_edges_from_faces(mesh)
+
+        mesh_data.append({
+            "vertices": np.array(transformed_vertices),
+            "edges": np.array(transformed_edge)
+        })
+
+    for child in node.children:
+        parcourir_nodes(child, global_transform, mdl, mesh_data)
+
+
+def load_mesh_data(m):
+    mdl = assimp.load(m)
+    root = mdl.rootnode
+    mesh_data = []
+    parcourir_nodes(mdl,root,mesh_data)
+    return mesh_data
+
 
 # Sommets du cube (centré et agrandi pour une meilleure visibilité)
 cube_vertices = np.array([
@@ -164,9 +203,15 @@ cube_edges = [
 # Variables de rotation
 yaw, pitch, roll = 0, 0, 0
 
-model = (cube_vertices, cube_edges)
-model_transform = cube_transform
+# Matrice origine monde
+origin = Transform()
+
+mesh_data = [[cube_vertices, cube_edges]]
+model_transform = Transform((0,0,5),(0,0,0),(1,1,1))
 proj_matrix = projection_matrix(90, width / height, 0.1, 1000)
+
+
+mesh_data = load_mesh_data("Couch.obj")
 
 
 # Boucle principale
@@ -182,20 +227,21 @@ while running:
             yaw -= dx * 0.3
             pitch -= dy * 0.3
 
-    # Ajouter une colonne de 1 pour utiliser des coordonnées homogènes (matrice 4x4)
-    model_vertices = np.hstack((model[0], np.ones((len(model[0]), 1))))
+    for mesh in mesh_data:
+        # Ajouter une colonne de 1 pour utiliser des coordonnées homogènes (matrice 4x4)
+        model_vertices = np.hstack((mesh[0], np.ones((len(mesh[0]), 1))))
 
-    # Appliquer la rotation et la projection
-    rotated_vertices = np.dot(model_vertices, rotation_matrix(yaw, pitch, roll))
+        # Appliquer la rotation et la projection
+        rotated_vertices = np.dot(model_vertices, rotation_matrix(yaw, pitch, roll))
 
-    # Appliquer la transformation globale
-    transformed_vertices = (model_transform.get_matrix() @ rotated_vertices.T).T[:, :3]
+        # Appliquer la transformation globale
+        transformed_vertices = (model_transform.get_matrix() @ rotated_vertices.T).T[:, :3]
 
-    projected_vertices = project_vertices(transformed_vertices, proj_matrix)
+        projected_vertices = project_vertices(transformed_vertices, proj_matrix)
 
 
-    # Dessiner le cube
-    draw_edges(model[1], projected_vertices)
+        # Dessiner le model
+        draw_edges(mesh[1], projected_vertices)
 
     pygame.display.flip()
 
