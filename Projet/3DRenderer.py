@@ -1,5 +1,4 @@
 import pygame
-import pyassimp
 import numpy as np
 
 # Initialiser pygame
@@ -49,7 +48,6 @@ def projection_matrix(fov, aspect_ratio, near, far):
         [0, 0, (far + near) / (near - far), (2 * far * near) / (near - far)],
         [0, 0, -1, 0]
     ])
-
 
 
 class Transform:
@@ -112,6 +110,24 @@ def project_vertices(vertices, p):
     return projected
 
 
+"""
+def project_vertices(vertices, proj_matrix):
+    # Passer tous les sommets en homogène en une seule opération
+    vertices_homogeneous = np.hstack((vertices, np.ones((vertices.shape[0], 1))))
+    
+    # Projection en une seule ligne
+    projected = vertices_homogeneous @ proj_matrix.T
+
+    # Perspective divide
+    projected /= projected[:, [3]]  # Divise chaque ligne par w
+
+    # Conversion en coordonnées écran
+    x_screen = ((projected[:, 0] + 1) * width / 2).astype(int)
+    y_screen = ((1 - projected[:, 1]) * height / 2).astype(int)
+
+    return list(zip(x_screen, y_screen))
+"""
+
 # Algorithme de tracé de segment de Bresenham
 def bresenham(x1, y1, x2, y2):
     points = []
@@ -143,62 +159,54 @@ def draw_edges(edges, vertices_2d):
                 screen.set_at(point, (0, 0, 0))
 
 
-def get_edges_from_faces(mesh):
-    edges = set()
-    for face in mesh.faces:
-        if len(face) >= 2:
+class ObjModel:
+    def __init__(self, filename, cube = False):
+        self.vertices = []
+        self.faces = []
+        self.edges = []
+
+        if cube:
+            # Sommets du cube
+            self.vertices = np.array([
+                [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],  # Face arrière
+                [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]  # Face avant
+            ])
+
+            # Arêtes du cube
+            self.edges = [
+                (0, 1), (1, 2), (2, 3), (3, 0),  # Face arrière
+                (4, 5), (5, 6), (6, 7), (7, 4),  # Face avant
+                (0, 4), (1, 5), (2, 6), (3, 7)  # Connexions entre faces
+            ]
+
+        elif filename:
+            self.load(filename)
+            self.edges = self.generate_edges()
+
+    def load(self, filename):
+        """Charge un fichier .obj et extrait les sommets et les faces"""
+        with open(filename, 'r') as f:
+            for line in f:
+                if line.startswith('v '):
+                    parts = line.strip().split()
+                    self.vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+                elif line.startswith('f '):
+                    parts = line.strip().split()
+                    face = [int(p.split('/')[0]) - 1 for p in parts[1:]]
+                    self.faces.append(face)
+        self.vertices = np.array(self.vertices)
+
+    def generate_edges(self):
+        """Génère des arêtes uniques à partir des faces"""
+        edge_set = set()
+        for face in self.faces:
             for i in range(len(face)):
                 a = face[i]
                 b = face[(i + 1) % len(face)]
                 edge = tuple(sorted((a, b)))
-                edges.add(edge)
-    return list(edges)
+                edge_set.add(edge)
+        return list(edge_set)
 
-
-def parcourir_nodes(mdl, node, mesh_data, parent_transform = (0,0,0)):
-    local_transform = node.transformation.astype(np.float64)
-    global_transform = parent_transform @ local_transform
-
-    for mesh_index in node.meshes:
-        mesh = mdl.meshes[mesh_index]
-        vertices = mesh.vertices
-
-        for v in vertices:
-            v_homo = np.append(v, 1)
-            transformed = global_transform @ v_homo
-            transformed_vertices(transformed[:3])
-
-        transformed_edge = get_edges_from_faces(mesh)
-
-        mesh_data.append({
-            "vertices": np.array(transformed_vertices),
-            "edges": np.array(transformed_edge)
-        })
-
-    for child in node.children:
-        parcourir_nodes(child, global_transform, mdl, mesh_data)
-
-
-def load_mesh_data(m):
-    mdl = assimp.load(m)
-    root = mdl.rootnode
-    mesh_data = []
-    parcourir_nodes(mdl,root,mesh_data)
-    return mesh_data
-
-
-# Sommets du cube (centré et agrandi pour une meilleure visibilité)
-cube_vertices = np.array([
-    [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],  # Face arrière
-    [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]       # Face avant
-    ])
-
-# Arêtes du cube
-cube_edges = [
-    (0, 1), (1, 2), (2, 3), (3, 0),  # Face arrière
-    (4, 5), (5, 6), (6, 7), (7, 4),  # Face avant
-    (0, 4), (1, 5), (2, 6), (3, 7)   # Connexions entre faces
-]
 
 # Variables de rotation
 yaw, pitch, roll = 0, 0, 0
@@ -206,12 +214,13 @@ yaw, pitch, roll = 0, 0, 0
 # Matrice origine monde
 origin = Transform()
 
-mesh_data = [[cube_vertices, cube_edges]]
-model_transform = Transform((0,0,5),(0,0,0),(1,1,1))
+load = True
+
+model = ObjModel("Couch.obj") if load == True else ObjModel("", True)
+
+model_transform = Transform((0,0,5),(0,-180,0),(1,1,1))
+
 proj_matrix = projection_matrix(90, width / height, 0.1, 1000)
-
-
-mesh_data = load_mesh_data("Couch.obj")
 
 
 # Boucle principale
@@ -224,24 +233,39 @@ while running:
             running = False
         elif event.type == pygame.MOUSEMOTION and pygame.mouse.get_pressed()[0]:
             dx, dy = event.rel
-            yaw -= dx * 0.3
+            yaw += dx * 0.3
             pitch -= dy * 0.3
 
-    for mesh in mesh_data:
-        # Ajouter une colonne de 1 pour utiliser des coordonnées homogènes (matrice 4x4)
-        model_vertices = np.hstack((mesh[0], np.ones((len(mesh[0]), 1))))
+    # Ajouter une colonne de 1 pour utiliser des coordonnées homogènes (matrice 4x4)
+    h_vertices_matrix = np.hstack((model.vertices, np.ones((len(model.vertices), 1))))
 
-        # Appliquer la rotation et la projection
-        rotated_vertices = np.dot(model_vertices, rotation_matrix(yaw, pitch, roll))
+    # Appliquer la rotation
+    rotated_vertices = h_vertices_matrix @ rotation_matrix(yaw, pitch, roll)
 
-        # Appliquer la transformation globale
-        transformed_vertices = (model_transform.get_matrix() @ rotated_vertices.T).T[:, :3]
+    # Appliquer la transformation globale
+    transformed_vertices = (model_transform.get_matrix() @ rotated_vertices.T).T[:, :3]
 
-        projected_vertices = project_vertices(transformed_vertices, proj_matrix)
+    # Appliquer la projection
+    projected_vertices = project_vertices(transformed_vertices, proj_matrix)
 
+    # Dessiner le model
+    draw_edges(model.edges, projected_vertices)
 
-        # Dessiner le model
-        draw_edges(mesh[1], projected_vertices)
+    # Calcul du FPS
+    current_time = pygame.time.get_ticks()
+
+    if 'last_time' not in locals():
+        last_time = current_time
+        fps = 0
+    else:
+        delta_time = current_time - last_time
+        fps = 1000 / delta_time if delta_time > 0 else 0
+        last_time = current_time
+
+    # Affichage du FPS
+    font = pygame.font.SysFont("Arial", 18)
+    fps_text = font.render(f"FPS : {fps:.1f}", True, (0, 0, 0))
+    screen.blit(fps_text, (10, 10))
 
     pygame.display.flip()
 
